@@ -1,0 +1,83 @@
+"""DINOv3 feature extraction. Returns L2-normalized CLS + patch-mean embeddings.
+
+Falls back to DINOv2 if DINOv3 weights are unavailable (HF gating, offline, etc).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import List, Optional
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from PIL import Image
+from transformers import AutoImageProcessor, AutoModel
+
+
+DEFAULT_MODELS = [
+    "facebook/dinov3-vits16-pretrain-lvd1689m",  # preferred
+    "facebook/dinov2-small",                      # fallback
+]
+
+
+@dataclass
+class FrameEmbedding:
+    idx: int
+    pts_s: float
+    cls: np.ndarray            # (D,) L2-normalized
+    patch_mean: np.ndarray     # (D,) L2-normalized mean of patch tokens
+    combined: np.ndarray       # (2D,) concat of [cls, patch_mean] then L2-normalized
+
+
+class DinoFeatureExtractor:
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        device: Optional[str] = None,
+        dtype: torch.dtype = torch.float32,
+    ):
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.dtype = dtype
+
+        candidates = [model_name] if model_name else DEFAULT_MODELS
+        last_err = None
+        for name in candidates:
+            try:
+                self.processor = AutoImageProcessor.from_pretrained(name)
+                self.model = AutoModel.from_pretrained(name, torch_dtype=dtype).to(self.device).eval()
+                self.model_name = name
+                break
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                continue
+        else:
+            raise RuntimeError(f"Could not load any DINO model. Last error: {last_err}")
+
+    @torch.inference_mode()
+    def embed_batch(self, images: List[np.ndarray], idxs: List[int], pts: List[float]) -> List[FrameEmbedding]:
+        """Embed a batch of RGB uint8 HxWx3 arrays."""
+        pil = [Image.fromarray(img) for img in images]
+        inputs = self.processor(images=pil, return_tensors="pt").to(self.device)
+        # Some DINO processors don't accept dtype; cast manually.
+        if "pixel_values" in inputs:
+            inputs["pixel_values"] = inputs["pixel_values"].to(self.dtype)
+
+        out = self.model(**inputs)
+        # DINOv2/v3 expose last_hidden_state: (B, 1+N, D) where token 0 is CLS.
+        hs = out.last_hidden_state  # (B, T, D)
+        cls = hs[:, 0, :]           # (B, D)
+        patches = hs[:, 1:, :]      # (B, N, D)
+        patch_mean = patches.mean(dim=1)  # (B, D)
+
+        cls = F.normalize(cls, dim=-1)
+        patch_mean = F.normalize(patch_mean, dim=-1)
+        combined = F.normalize(torch.cat([cls, patch_mean], dim=-1), dim=-1)
+
+        cls_np = cls.float().cpu().numpy()
+        pm_np = patch_mean.float().cpu().numpy()
+        cb_np = combined.float().cpu().numpy()
+
+        return [
+            FrameEmbedding(idx=i, pts_s=p, cls=cls_np[k], patch_mean=pm_np[k], combined=cb_np[k])
+            for k, (i, p) in enumerate(zip(idxs, pts))
+        ]
