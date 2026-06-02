@@ -393,8 +393,6 @@ peak`.)
 
 ## 8. Honest limitations
 
-This is the section the original proposal didn't have.
-
 **(a) "Semantic" is doing a lot of work.** DINOv3 is an *image* model. It
 will detect transitions that have *some* visual correlate — pixels of
 sufficiently different distribution. The traffic-light example in the
@@ -525,9 +523,3 @@ can swap. Planned ablations:
    per-frame in memory, but main.py expects an offline file. Wrap it as a
    producer/consumer for RTSP.
 
-If the ablations land the way I expect — DINOv3 + patches modestly beats
-CLIP, per-patch novelty further closes the gap on small-region transitions
-— the project has a publishable angle: **"a strong, fully self-supervised,
-training-free baseline for GEBD."** If not, the honest finding ("dense
-self-supervised features are not enough for true semantic transitions; you
-need video models") is itself worth writing up.
