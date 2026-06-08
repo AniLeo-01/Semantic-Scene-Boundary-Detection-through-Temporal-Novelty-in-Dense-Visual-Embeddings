@@ -24,11 +24,12 @@ over videos**, reported at several `rel_dis` tolerances (0.05 strict,
 pip install yt-dlp                # for video download
 # (the harness itself uses numpy + the existing src/ stack)
 
-# 2) get labels (~5 MB pickle from the GEBD repo)
-mkdir -p data/gebd && cd data/gebd
-curl -L -o k400_mr345_val_min_change_duration0.3.pkl \
-  https://github.com/StanLei52/GEBD/raw/main/data/export/k400_mr345_val_min_change_duration0.3.pkl
-cd ../..
+# 2) get labels — the GEBD authors host annotations on Google Drive, not GitHub
+pip install gdown
+mkdir -p data/gebd
+gdown --folder https://drive.google.com/drive/folders/1AlPr63Q9D-HAGc5bOUNTzjCiWOC1a3xo \
+      -O data/gebd
+# you want:  data/gebd/k400_mr345_val_min_change_duration0.3.pkl
 
 # 3) download a sample of videos (full val set is ~4k after attrition;
 #    start with 200 to verify your pipeline runs)

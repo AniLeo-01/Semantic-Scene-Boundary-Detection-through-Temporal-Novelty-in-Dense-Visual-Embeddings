@@ -45,9 +45,30 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-First run downloads weights from HuggingFace Hub. If the DINOv3 repo is
-gated for your account, the loader silently falls back to DINOv2-small —
-the same interface, no code change.
+First run downloads weights from HuggingFace Hub. **DINOv3 is gated** —
+the loader reads `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN` /
+`HUGGINGFACE_TOKEN`) from the environment to authenticate. If no token
+is set, or the token doesn't have access to the DINOv3 repo, the loader
+silently falls back to DINOv2-small (same interface, no code change).
+
+```bash
+# Linux / macOS / Colab
+export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
+python -m src.main ...
+```
+
+```python
+# Colab notebook
+import os
+os.environ["HF_TOKEN"] = "hf_xxxxxxxxxxxxxxxxxxxxx"
+from src.main import run
+run(...)
+```
+
+To get a token: HuggingFace → Settings → Access Tokens → New token
+(read scope is enough). Then **request access** at
+[huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m)
+and wait for approval.
 
 To force a specific backbone:
 
@@ -367,10 +388,12 @@ input 224×224, batch 8: **~120 sampled FPS** for feature extraction. A
 PATH. PyAV bundles its own FFmpeg in the wheel, but rebuilds from source
 when the system one is mismatched.
 
-**`AutoModel.from_pretrained` 401 / gated.** DINOv3 may be gated for your
-account. Either `huggingface-cli login` and accept the model terms, or
-let the fallback to DINOv2-small happen. Pass `--model facebook/dinov2-small`
-to skip the v3 attempt entirely.
+**`AutoModel.from_pretrained` 401 / gated.** DINOv3 is gated. Three options:
+(1) set `HF_TOKEN` in the environment with a token that has access to
+`facebook/dinov3-vits16-pretrain-lvd1689m` (request access on the model
+page first); (2) `huggingface-cli login` once on the machine, which writes
+the token to `~/.cache/huggingface/token`; (3) let the silent fallback to
+DINOv2-small happen, or force it with `--model facebook/dinov2-small`.
 
 **No peaks detected, or modest real peaks are being missed.** Lower
 `--peak-prom` (try `1.5` or `1.0`). This loosens both the absolute height

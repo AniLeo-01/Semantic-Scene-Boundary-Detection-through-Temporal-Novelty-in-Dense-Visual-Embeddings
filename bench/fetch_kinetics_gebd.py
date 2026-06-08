@@ -30,7 +30,18 @@ def load_labels(path: str) -> dict:
     p = Path(path)
     if p.suffix == ".json":
         return json.load(open(p))
-    return pickle.load(open(p, "rb"))
+    with open(p, "rb") as f:
+        head = f.read(8)
+        f.seek(0)
+        if head.startswith(b"<") or head.startswith(b"\n<") or head.startswith(b"version "):
+            raise RuntimeError(
+                f"{p} is not a pickle. First bytes: {head!r}\n"
+                "Your download saved an HTML page or a Git-LFS pointer, not the\n"
+                "actual labels. The official GEBD labels live on Google Drive:\n"
+                "  https://drive.google.com/drive/folders/1AlPr63Q9D-HAGc5bOUNTzjCiWOC1a3xo\n"
+                "  pip install gdown && gdown --folder <that URL> -O data/gebd"
+            )
+        return pickle.load(f)
 
 
 def youtube_url(video_id: str) -> str:

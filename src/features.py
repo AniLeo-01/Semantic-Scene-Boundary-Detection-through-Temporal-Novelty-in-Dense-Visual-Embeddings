@@ -1,9 +1,15 @@
 """DINOv3 feature extraction. Returns L2-normalized CLS + patch-mean embeddings.
 
 Falls back to DINOv2 if DINOv3 weights are unavailable (HF gating, offline, etc).
+
+Authentication for gated repos: set ``HF_TOKEN`` (or the HuggingFace-standard
+``HUGGING_FACE_HUB_TOKEN``) in the environment before importing. DINOv3 is
+gated on HuggingFace; without a token the loader silently falls through to
+DINOv2.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -12,6 +18,15 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModel
+
+
+def _hf_token() -> Optional[str]:
+    """Read the HuggingFace token from env. Empty strings count as missing."""
+    for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
+        tok = os.environ.get(var)
+        if tok:
+            return tok
+    return None
 
 
 DEFAULT_MODELS = [
@@ -35,23 +50,37 @@ class DinoFeatureExtractor:
         model_name: Optional[str] = None,
         device: Optional[str] = None,
         dtype: torch.dtype = torch.float32,
+        token: Optional[str] = None,
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.dtype = dtype
+        # Explicit > env > None. Env is read once at construction.
+        self.token = token if token is not None else _hf_token()
 
         candidates = [model_name] if model_name else DEFAULT_MODELS
         last_err = None
         for name in candidates:
             try:
-                self.processor = AutoImageProcessor.from_pretrained(name)
-                self.model = AutoModel.from_pretrained(name, torch_dtype=dtype).to(self.device).eval()
+                self.processor = AutoImageProcessor.from_pretrained(name, token=self.token)
+                self.model = (
+                    AutoModel.from_pretrained(name, torch_dtype=dtype, token=self.token)
+                    .to(self.device)
+                    .eval()
+                )
                 self.model_name = name
                 break
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 continue
         else:
-            raise RuntimeError(f"Could not load any DINO model. Last error: {last_err}")
+            extra = ""
+            if self.token is None:
+                extra = (
+                    "\nNote: no HuggingFace token detected. DINOv3 is gated — "
+                    "set HF_TOKEN in the env, or pass `token=...` to "
+                    "DinoFeatureExtractor."
+                )
+            raise RuntimeError(f"Could not load any DINO model. Last error: {last_err}{extra}")
 
     @torch.inference_mode()
     def embed_batch(self, images: List[np.ndarray], idxs: List[int], pts: List[float]) -> List[FrameEmbedding]:
