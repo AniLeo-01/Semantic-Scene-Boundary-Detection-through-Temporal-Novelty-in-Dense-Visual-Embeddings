@@ -57,9 +57,12 @@ class DinoFeatureExtractor:
         # Explicit > env > None. Env is read once at construction.
         self.token = token if token is not None else _hf_token()
 
+        import sys as _sys
         candidates = [model_name] if model_name else DEFAULT_MODELS
+        explicit = model_name is not None
         last_err = None
         for name in candidates:
+            print(f"[features] trying {name}", file=_sys.stderr, flush=True)
             try:
                 self.processor = AutoImageProcessor.from_pretrained(name, token=self.token)
                 self.model = (
@@ -68,9 +71,16 @@ class DinoFeatureExtractor:
                     .eval()
                 )
                 self.model_name = name
+                print(f"[features] loaded {name}", file=_sys.stderr, flush=True)
                 break
             except Exception as e:  # noqa: BLE001
                 last_err = e
+                print(f"[features] FAILED {name}: {type(e).__name__}: {e}",
+                      file=_sys.stderr, flush=True)
+                # If the caller named a model explicitly, don't silently fall
+                # through to a different one — surface the real error.
+                if explicit:
+                    raise
                 continue
         else:
             extra = ""

@@ -98,22 +98,39 @@ def gt_boundaries(entry: dict) -> List[List[float]]:
             out.append(seq)
         return out
 
-    # Raw format: timestamps in seconds, possibly with labels like "A: B"
+    # Raw format: each annotator's entry is a list of dicts with
+    # start_time / end_time / label. Range entries (start < end) describe
+    # a gradual transition; the conventional boundary point is the midpoint.
     ann = entry.get("substages_timestamps") or []
     out: List[List[float]] = []
     for one in ann:
-        seq = []
+        seq: List[float] = []
         for item in one:
-            if isinstance(item, (list, tuple)) and item:
-                item = item[0]
             if isinstance(item, dict):
-                # raw entries can be {timestamp: ..., label: ...}
-                item = item.get("timestamp", item.get("time", 0.0))
+                if "start_time" in item and "end_time" in item:
+                    s = float(item["start_time"]); e = float(item["end_time"])
+                    seq.append((s + e) / 2.0)
+                    continue
+                v = item.get("timestamp", item.get("time"))
+                if v is not None:
+                    try:
+                        seq.append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+                continue
+            if isinstance(item, (list, tuple)) and item:
+                # legacy: bare timestamp pair
+                if len(item) >= 2:
+                    try:
+                        seq.append((float(item[0]) + float(item[1])) / 2.0)
+                        continue
+                    except (TypeError, ValueError):
+                        pass
+                item = item[0]
             try:
                 seq.append(float(item))
             except (TypeError, ValueError):
                 continue
-        # if values look like frame indices, convert
         if seq and max(seq) > dur * 2 and fps > 0:
             seq = [x / fps for x in seq]
         out.append(sorted(seq))
