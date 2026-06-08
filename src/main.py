@@ -35,6 +35,8 @@ def run(
     keyframe_method: str = "centroid",
     smoothing: int = 3,
     save_embeddings: bool = False,
+    copy_video: bool = False,
+    video_url: str | None = None,
 ) -> dict:
     out = Path(out_dir)
     (out / "keyframes").mkdir(parents=True, exist_ok=True)
@@ -149,6 +151,8 @@ def run(
         duration_s=dur,
         model_name=extractor.model_name,
         fps_sampled=fps,
+        copy_video=copy_video,
+        video_url=video_url,
     )
     print(f"[viewer] open in a browser: {viewer_path}")
 
@@ -170,6 +174,16 @@ def parse_args():
     p.add_argument("--keyframe-method", choices=["centroid", "peak"], default="centroid")
     p.add_argument("--smoothing", type=int, default=3)
     p.add_argument("--save-embeddings", action="store_true")
+    p.add_argument(
+        "--copy-video",
+        action="store_true",
+        help="copy source video into output dir so viewer.html references it by filename",
+    )
+    p.add_argument(
+        "--video-url",
+        default=None,
+        help="explicit src for the <video> tag (overrides --copy-video and the default relative path)",
+    )
     return p.parse_args()
 
 
@@ -188,4 +202,6 @@ if __name__ == "__main__":
         keyframe_method=args.keyframe_method,
         smoothing=args.smoothing,
         save_embeddings=args.save_embeddings,
+        copy_video=args.copy_video,
+        video_url=args.video_url,
     )

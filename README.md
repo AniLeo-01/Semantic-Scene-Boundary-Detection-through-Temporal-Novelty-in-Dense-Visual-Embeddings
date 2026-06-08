@@ -84,6 +84,8 @@ frames, the adaptive threshold, the peak count, and writes everything to
 | `--keyframe-method` | str | `centroid` | `centroid` or `peak`. |
 | `--smoothing` | int | `3` | Length of moving-average filter on novelty signal. |
 | `--save-embeddings` | flag | off | Cache `(T, D)` embeddings to `outputs/<run>/embeddings.npz`. |
+| `--copy-video` | flag | off | Copy the source video into the output dir so `viewer.html` references it by filename (robust against being moved, opened from a sandboxed iframe like Colab / IPython, or downloaded without the original folder structure). |
+| `--video-url` | str | none | Explicit `src` for the `<video>` tag in `viewer.html`. Overrides `--copy-video` and the default relative path. Use when hosting the video at a known URL. |
 
 ## Outputs
 

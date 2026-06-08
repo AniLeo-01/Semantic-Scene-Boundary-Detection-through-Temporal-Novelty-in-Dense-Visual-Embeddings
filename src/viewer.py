@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Optional, Sequence
 
 
 _HTML_TEMPLATE = r"""<!doctype html>
@@ -65,10 +66,19 @@ _HTML_TEMPLATE = r"""<!doctype html>
   .video-wrap {
     flex: 1; min-height: 0; display: flex; align-items: center;
     justify-content: center; background: #000; padding: 8px;
+    position: relative;
   }
   video {
     max-width: 100%; max-height: 100%; outline: none; border-radius: 4px;
   }
+  #viderr {
+    display: none; position: absolute; inset: 8px;
+    background: rgba(15,18,22,0.92); color: var(--fg);
+    border: 1px solid var(--accent); border-radius: 4px;
+    padding: 16px; font-size: 12px; overflow: auto;
+  }
+  #viderr h3 { margin: 0 0 6px; font-size: 13px; color: var(--accent); }
+  #viderr code { background: var(--panel-2); padding: 1px 5px; border-radius: 3px; word-break: break-all; }
   .chart-wrap {
     height: 200px; padding: 8px 16px 12px; background: var(--panel);
     border-top: 1px solid var(--grid); position: relative;
@@ -118,6 +128,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
   <div class="player">
     <div class="video-wrap">
       <video id="vid" src="__VIDEO_REL__" controls preload="metadata"></video>
+      <div id="viderr"></div>
     </div>
     <div class="chart-wrap">
       <div class="legend">
@@ -300,6 +311,25 @@ vid.addEventListener("loadedmetadata", () => {
   if (!DATA.duration || !isFinite(DATA.duration)) DATA.duration = vid.duration;
   fitCanvas();
 });
+
+// Diagnostic overlay when the video fails to load. Shows the URL the
+// browser tried so users can fix path / codec / sandbox issues fast.
+vid.addEventListener("error", () => {
+  const codes = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
+  const e = vid.error || {};
+  const box = document.getElementById("viderr");
+  box.innerHTML =
+    "<h3>Video failed to load</h3>" +
+    "<div>Browser error: <strong>" + (codes[e.code] || e.code || "?") + "</strong>" +
+    (e.message ? " — " + e.message : "") + "</div>" +
+    "<div style='margin-top:8px'>Tried <code>" + vid.currentSrc + "</code></div>" +
+    "<ul style='margin:8px 0 0 16px;padding:0'>" +
+    "<li>If the URL above is relative and you opened this via Colab / IPython, the iframe sandbox can't reach it — re-run with <code>copy_video=True</code> or pass <code>video_url=&lt;a hosted URL&gt;</code>.</li>" +
+    "<li>If the URL looks right, the codec may be unsupported. Re-encode: <code>ffmpeg -i in.mp4 -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4</code>.</li>" +
+    "</ul>";
+  box.style.display = "block";
+});
+
 fitCanvas();
 </script>
 </body>
@@ -406,16 +436,37 @@ def write_viewer(
     duration_s: float,
     model_name: str,
     fps_sampled: float,
+    copy_video: bool = False,
+    video_url: Optional[str] = None,
 ) -> Path:
+    """Write viewer.html into ``out_dir``.
+
+    Args:
+        copy_video: If True, copy the source video into ``out_dir`` so the
+            viewer can reference it by filename only. Robust against being
+            moved / opened from a sandboxed iframe (Colab, IPython.display).
+        video_url: Explicit ``src`` value for the ``<video>`` element.
+            Overrides both ``copy_video`` and the default relative path.
+            Use this when hosting the video at a known URL.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # Relative video path — viewer works without any web server.
-    try:
-        video_rel = os.path.relpath(os.path.abspath(video_path), start=out.resolve())
-    except ValueError:
-        # different drives on Windows; fall back to absolute file:// URI
-        video_rel = "file://" + os.path.abspath(video_path)
+    if video_url is not None:
+        video_rel = video_url
+    elif copy_video:
+        dst = out / os.path.basename(video_path)
+        if os.path.abspath(video_path) != str(dst.resolve()):
+            shutil.copy2(video_path, dst)
+        video_rel = os.path.basename(video_path)
+    else:
+        # Relative path — viewer works over file:// when the source video
+        # stays at its original location relative to the output directory.
+        try:
+            video_rel = os.path.relpath(os.path.abspath(video_path), start=out.resolve())
+        except ValueError:
+            # different drives on Windows; fall back to absolute file:// URI
+            video_rel = "file://" + os.path.abspath(video_path)
 
     keyframe_relpaths = [
         f"keyframes/scene_{s['scene_idx']:03d}.jpg" for s in scenes
