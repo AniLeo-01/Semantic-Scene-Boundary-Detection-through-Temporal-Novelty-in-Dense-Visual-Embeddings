@@ -92,13 +92,41 @@ A run writes:
 ```
 outputs/run1/
 ├── boundaries.json          # full result + config
-├── novelty.png              # signal plot with peaks
+├── novelty.png              # static signal plot with peaks
+├── viewer.html              # interactive viewer (open in any browser)
 ├── keyframes/
 │   ├── scene_000.jpg
 │   ├── scene_001.jpg
 │   └── ...
 └── embeddings.npz           # only with --save-embeddings
 ```
+
+### `viewer.html` — interactive visualization
+
+A self-contained, dependency-free HTML page that ties the three outputs
+together against the source video:
+
+- the video plays on the left;
+- the novelty signal is rendered live underneath it (canvas), with the
+  height floor drawn, detected peaks shown as red verticals, and a
+  yellow **playhead cursor** that tracks `video.currentTime`;
+- the right column is a scrollable list of keyframe thumbnails — the
+  card for the currently-playing scene is highlighted and auto-scrolls
+  into view.
+
+Everything is anchored to the video timeline:
+
+- click anywhere on the chart → seeks the video to that timestamp;
+- click any keyframe card → jumps the video to the start of that scene;
+- playing the video → the chart cursor and active keyframe update in
+  real time.
+
+The page inlines all of the data it needs (novelty samples, peak indices,
+scene metadata, thresholds), so it works directly from `file://` without
+a web server. The video is referenced by a relative path from the output
+directory and the keyframes by relative paths into `keyframes/`. To view
+the file on a different machine, copy the entire `outputs/run1/` folder
+**plus the source video** while preserving the relative path.
 
 ### `boundaries.json` schema
 
@@ -146,10 +174,12 @@ timeline.
 │   ├── features.py    ← DINOv3 feature extractor
 │   ├── novelty.py     ← memory bank + scoring + peak detection
 │   ├── keyframes.py   ← centroid/peak keyframe selection
-│   ├── viz.py         ← novelty plot
+│   ├── viz.py         ← static novelty plot
+│   ├── viewer.py      ← interactive viewer.html generator
 │   └── main.py        ← CLI + end-to-end orchestrator
 └── tests/
-    └── test_novelty.py
+    ├── test_novelty.py
+    └── test_viewer.py
 ```
 
 ## Module reference
@@ -226,6 +256,24 @@ Writes a single PNG. When `height_floor` is supplied, it is drawn as the
 dashed reference line (since the detector's effective absolute cut is the
 height floor, not the raw threshold); `prominence` is reported in the
 legend so the detector state is readable from the plot.
+
+### `src.viewer`
+
+```python
+build_viewer_html(*, video_path, video_relpath, novelty, pts_s,
+                  peak_idxs, threshold, prominence, scenes,
+                  keyframe_relpaths, duration_s, model_name,
+                  fps_sampled) -> str
+write_viewer(out_dir, video_path, novelty, pts_s, peak_idxs,
+             threshold, prominence, scenes, duration_s, model_name,
+             fps_sampled) -> Path
+```
+
+Builds the interactive `viewer.html`. `build_viewer_html` returns the
+HTML string; `write_viewer` writes it into `out_dir/viewer.html` and
+returns the path. All numeric data (novelty samples, peak indices, scene
+metadata, thresholds) is inlined as a JSON literal, so the page works
+over `file://` with no fetch / CORS issues.
 
 ### `src.main`
 

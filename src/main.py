@@ -18,6 +18,7 @@ from .features import DinoFeatureExtractor
 from .keyframes import select_keyframes
 from .novelty import compute_novelty, detect_peaks, peaks_to_segments
 from .sampling import sample_frames, video_meta
+from .viewer import write_viewer
 from .viz import plot_novelty
 
 
@@ -134,6 +135,22 @@ def run(
         height_floor=nv.threshold * 0.6,
         prominence=nv.prominence,
     )
+
+    # 8) interactive viewer (self-contained HTML)
+    viewer_path = write_viewer(
+        out_dir=out,
+        video_path=video_path,
+        novelty=nv.scores.tolist(),
+        pts_s=pts_s.tolist(),
+        peak_idxs=nv.peak_idxs.tolist(),
+        threshold=nv.threshold,
+        prominence=nv.prominence,
+        scenes=boundaries,
+        duration_s=dur,
+        model_name=extractor.model_name,
+        fps_sampled=fps,
+    )
+    print(f"[viewer] open in a browser: {viewer_path}")
 
     print(f"[done] {len(scenes)} scenes -> {out}")
     return summary
