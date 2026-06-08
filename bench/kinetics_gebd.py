@@ -80,20 +80,44 @@ def load_gebd_labels(labels_path: str) -> Dict[str, dict]:
 
 
 def gt_boundaries(entry: dict) -> List[List[float]]:
-    """Return per-annotator boundary lists in seconds."""
-    ann = entry.get("substages_timestamps") or entry.get("substages_myframeidx") or []
-    # Some exports store frame indices instead of seconds — convert if so.
+    """Return per-annotator boundary lists in seconds.
+
+    Handles BOTH the raw annotation format (``substages_timestamps`` as a
+    list of per-annotator entries, each an "A: B"-labelled list) and the
+    processed format (``substages_myframeidx`` as frame indices).
+    """
     fps = float(entry.get("fps", 30.0))
-    fixed: List[List[float]] = []
+    dur = float(entry.get("video_duration", 1e9))
+
+    # Processed format: frame indices, one list per annotator
+    if "substages_myframeidx" in entry and entry["substages_myframeidx"]:
+        ann = entry["substages_myframeidx"]
+        out = []
+        for one in ann:
+            seq = sorted(float(x) / fps if fps > 0 else 0.0 for x in one)
+            out.append(seq)
+        return out
+
+    # Raw format: timestamps in seconds, possibly with labels like "A: B"
+    ann = entry.get("substages_timestamps") or []
+    out: List[List[float]] = []
     for one in ann:
-        seq = [float(x) for x in one]
-        # Heuristic: if values look like frame indices (max > duration*2),
-        # convert by dividing by fps.
-        dur = float(entry.get("video_duration", 1e9))
+        seq = []
+        for item in one:
+            if isinstance(item, (list, tuple)) and item:
+                item = item[0]
+            if isinstance(item, dict):
+                # raw entries can be {timestamp: ..., label: ...}
+                item = item.get("timestamp", item.get("time", 0.0))
+            try:
+                seq.append(float(item))
+            except (TypeError, ValueError):
+                continue
+        # if values look like frame indices, convert
         if seq and max(seq) > dur * 2 and fps > 0:
             seq = [x / fps for x in seq]
-        fixed.append(sorted(seq))
-    return fixed
+        out.append(sorted(seq))
+    return out
 
 
 def video_duration(entry: dict) -> float:
