@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -93,7 +92,10 @@ def run(
     # 3) novelty + 4) peaks
     scores = compute_novelty(embeddings, memory=memory)
     nv = detect_peaks(scores, min_gap=min_gap, prominence_k=peak_prom, smoothing=smoothing)
-    print(f"[novelty] threshold={nv.threshold:.4f} peaks={len(nv.peak_idxs)}")
+    print(
+        f"[novelty] height_floor={nv.threshold * 0.6:.4f} "
+        f"prominence={nv.prominence:.4f} peaks={len(nv.peak_idxs)}"
+    )
 
     # 5) segments + keyframes
     segs = peaks_to_segments(nv.peak_idxs, n_frames=len(scores))
@@ -115,6 +117,7 @@ def run(
         "min_gap": min_gap,
         "use_patches": use_patches,
         "threshold": nv.threshold,
+        "prominence": nv.prominence,
         "n_scenes": len(scenes),
         "scenes": boundaries,
     }
@@ -122,7 +125,15 @@ def run(
         json.dump(summary, f, indent=2)
 
     # 7) plot
-    plot_novelty(nv.scores, nv.peak_idxs, nv.threshold, pts_s, str(out / "novelty.png"))
+    plot_novelty(
+        nv.scores,
+        nv.peak_idxs,
+        nv.threshold,
+        pts_s,
+        str(out / "novelty.png"),
+        height_floor=nv.threshold * 0.6,
+        prominence=nv.prominence,
+    )
 
     print(f"[done] {len(scenes)} scenes -> {out}")
     return summary

@@ -5,6 +5,14 @@ embeddings in the memory bank. Higher = more novel.
 
 Why max instead of mean: prevents a long stretch of similar frames from
 "averaging out" and falsely flagging the next normal frame as novel.
+
+Peak detection uses BOTH:
+  * a loose absolute height floor (so noise spikes near baseline don't count), and
+  * a prominence requirement (so a peak must stand out from its local
+    neighbourhood, regardless of absolute value).
+
+The prominence test catches real but modest peaks that sit only slightly
+above a noisy baseline — peaks the old height-only rule missed.
 """
 from __future__ import annotations
 
@@ -20,7 +28,8 @@ from scipy.signal import find_peaks
 class NoveltyResult:
     scores: np.ndarray          # (T,) novelty per sampled frame
     peak_idxs: np.ndarray       # indices into scores (sampled-frame indices)
-    threshold: float            # effective threshold used (median + k*MAD)
+    threshold: float            # effective height floor used in find_peaks
+    prominence: float           # effective prominence requirement used
 
 
 def compute_novelty(embeddings: np.ndarray, memory: int = 16, warmup: int = 4) -> np.ndarray:
@@ -56,18 +65,48 @@ def detect_peaks(
     min_gap: int = 8,
     prominence_k: float = 2.0,
     smoothing: int = 3,
+    height_floor_ratio: float = 0.6,
 ) -> NoveltyResult:
     """Adaptive peak detection on the novelty signal.
 
-    Threshold = median(scores) + prominence_k * MAD. Robust to outliers.
+    Two adaptive thresholds derived from the data:
+      * ``thresh``      = median + prominence_k * 1.4826 * MAD
+        Treated as a loose absolute *height floor* (scaled by
+        ``height_floor_ratio``) so that obvious noise near baseline
+        is excluded.
+      * ``prominence``  = prominence_k * 1.4826 * MAD
+        A peak must rise by at least this much above the surrounding
+        signal to count. This catches real peaks that are only
+        modestly above the global baseline but clearly local maxima.
+
+    Tuning notes:
+      * Too many peaks  -> raise ``prominence_k`` (e.g. 2.5 - 3.0) or
+        raise ``min_gap``.
+      * Missed peaks     -> lower ``prominence_k`` (e.g. 1.5 - 1.8) or
+        lower ``height_floor_ratio`` (e.g. 0.4).
+      * Clusters of peaks on one transition -> raise ``min_gap`` and/or
+        ``smoothing``; ``prominence_k`` should usually stay put.
     """
     y = smooth(scores, smoothing)
     med = float(np.median(y))
     mad = float(np.median(np.abs(y - med)) + 1e-8)
-    thresh = med + prominence_k * 1.4826 * mad  # 1.4826 makes MAD a std estimator
 
-    peaks, _ = find_peaks(y, height=thresh, distance=max(min_gap, 1))
-    return NoveltyResult(scores=y.astype(np.float32), peak_idxs=peaks.astype(np.int64), threshold=float(thresh))
+    # Adaptive thresholds. 1.4826 makes MAD a Gaussian-std estimator.
+    thresh = med + prominence_k * 1.4826 * mad
+    prominence = prominence_k * 1.4826 * mad
+
+    peaks, _ = find_peaks(
+        y,
+        height=thresh * height_floor_ratio,  # loose absolute floor
+        prominence=prominence,               # must stand out locally
+        distance=max(min_gap, 1),
+    )
+    return NoveltyResult(
+        scores=y.astype(np.float32),
+        peak_idxs=peaks.astype(np.int64),
+        threshold=float(thresh),
+        prominence=float(prominence),
+    )
 
 
 def peaks_to_segments(peak_idxs: Iterable[int], n_frames: int) -> List[tuple]:
