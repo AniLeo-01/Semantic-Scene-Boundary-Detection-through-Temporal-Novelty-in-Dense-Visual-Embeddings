@@ -64,10 +64,18 @@ def youtube_url(yt_id: str) -> str:
     return f"https://www.youtube.com/watch?v={yt_id}"
 
 
+_ERR_PRINT_BUDGET = 5  # show full errors for the first few failures
+
+
 def fetch_one(video_id: str, out_dir: Path,
-              start_s: float | None = None, end_s: float | None = None) -> bool:
+              start_s: float | None = None, end_s: float | None = None,
+              cookies: str | None = None, verbose_errors: bool = False) -> bool:
     """Download a single clip. If ``start_s``/``end_s`` are provided,
     cut to that range so the local file's timeline matches GEBD's GT.
+
+    ``cookies`` — path to a Netscape-format cookies.txt (for sign-in /
+    bot-challenge bypass). ``verbose_errors`` prints yt-dlp's stderr
+    on failure.
     """
     dst = out_dir / f"{video_id}.mp4"
     if dst.exists():
@@ -82,10 +90,10 @@ def fetch_one(video_id: str, out_dir: Path,
         "--merge-output-format", "mp4",
         "-o", str(dst),
         "--no-warnings",
-        "--quiet",
     ]
+    if cookies:
+        cmd += ["--cookies", cookies]
     if start_s is not None and end_s is not None and end_s > start_s:
-        # Range cut — yt-dlp will keyframe-align; close enough for GEBD.
         cmd += ["--download-sections", f"*{start_s:.2f}-{end_s:.2f}",
                 "--force-keyframes-at-cuts"]
     cmd.append(youtube_url(yt_id))
@@ -94,7 +102,14 @@ def fetch_one(video_id: str, out_dir: Path,
         subprocess.run(cmd, check=True, timeout=180,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         return dst.exists()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except subprocess.CalledProcessError as e:
+        if verbose_errors:
+            tail = (e.stderr or b"").decode("utf-8", errors="replace").splitlines()[-3:]
+            sys.stderr.write(f"\n[fetch] {video_id} failed: " + " | ".join(tail) + "\n")
+        return False
+    except subprocess.TimeoutExpired:
+        if verbose_errors:
+            sys.stderr.write(f"\n[fetch] {video_id} timed out\n")
         return False
 
 
@@ -103,6 +118,8 @@ def main():
     ap.add_argument("--labels", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--max", type=int, default=None)
+    ap.add_argument("--cookies", default=None,
+                    help="Netscape cookies.txt for YouTube sign-in (bypasses bot challenge)")
     args = ap.parse_args()
 
     if not shutil.which("yt-dlp"):
@@ -115,20 +132,30 @@ def main():
 
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     ok = miss = 0
+    err_budget = _ERR_PRINT_BUDGET
     for i, vid in enumerate(vids, 1):
-        # Prefer start/end from the label entry — most reliable source.
         entry = labels[vid] if isinstance(labels[vid], dict) else {}
         start_s = entry.get("start_time") or entry.get("start_s")
         end_s = entry.get("end_time") or entry.get("end_s")
         if start_s is None and "video_duration" in entry:
-            # Fall back to parsing from the id; many K400 ids encode it.
             _, ps, pe = parse_video_id(vid)
             start_s, end_s = ps, pe
-        success = fetch_one(vid, out, start_s=start_s, end_s=end_s)
+        success = fetch_one(vid, out, start_s=start_s, end_s=end_s,
+                            cookies=args.cookies,
+                            verbose_errors=(err_budget > 0))
+        if not success:
+            err_budget -= 1
         ok += int(success); miss += int(not success)
         print(f"[{i}/{len(vids)}] {vid}  ok={ok}  miss={miss}", end="\r")
     print()
     print(f"done: {ok}/{len(vids)} downloaded, {miss} missing")
+    if ok == 0:
+        sys.stderr.write(
+            "\nAll downloads failed. Likely causes:\n"
+            "  * yt-dlp outdated:  pip install -U yt-dlp\n"
+            "  * YouTube bot challenge:  pass --cookies cookies.txt\n"
+            "    (export from your browser with the 'Get cookies.txt' extension)\n"
+        )
 
 
 if __name__ == "__main__":
