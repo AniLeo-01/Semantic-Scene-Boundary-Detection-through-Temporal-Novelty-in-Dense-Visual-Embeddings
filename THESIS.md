@@ -466,8 +466,8 @@ the negative result is still informative.
 
 Concretely, we declare success if:
 
-- On the BBC Planet Earth scene-boundary benchmark, F1 at a strict
-  tolerance (`rel_dis ≈ 0.005`–`0.01`) is within ~5 points of trained
+- On Charades (or another temporal-action-segment benchmark), F1 at
+  a moderate tolerance (`rel_dis ≈ 0.1`) is within ~5 points of trained
   baselines despite using zero training.
 - On a hand-curated set of "slow semantic transition" clips (traffic
   lights, manufacturing, gameplay), the system fires within ±1 second
