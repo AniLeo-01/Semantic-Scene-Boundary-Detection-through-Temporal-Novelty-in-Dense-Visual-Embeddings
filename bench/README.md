@@ -3,9 +3,13 @@
 Currently implemented:
 
 - **Charades** (`bench/charades.py`) — temporal action segments treated
-  as scene-like boundaries. Direct download from AI2's S3 (no YouTube,
-  no auth, no scraping).
+  as scene-like boundaries. Direct download from AI2's S3.
 - **Custom** (`bench/custom.py`) — hand-annotated videos you provide.
+- **Baselines** (`bench/baselines.py`) — frame-difference + uniform
+  spacing, against either dataset.
+- **Sweep** (`bench/sweep.py`) — cache features once, sweep `memory`,
+  `peak_prom`, and score modes (pooled / CLS-only / per-patch Chamfer)
+  cheaply without re-embedding.
 
 The scoring logic in `bench/metrics.py` is dataset-agnostic — F1@rel_dis
 with greedy 1-to-1 matching — so adding a new dataset is just a label
@@ -203,6 +207,116 @@ clip, then open the generated `viewer.html` (via `python -m src.main`,
 not via `bench.custom`) and eyeball whether the detected peaks line up
 with your annotated boundaries. If they don't, your params are off and
 no amount of F1 sweeping will fix it.
+
+## Per-patch (Chamfer) novelty
+
+The default detector pools patch tokens to a single vector before
+comparing. When localised changes matter — a hand entering frame, a
+small object moving — pooling washes them out.
+
+Per-patch novelty fixes that: for each query patch, find its single
+best match across the K-frame memory bank's patches, then aggregate.
+Three aggregations are supported via ``--patch-agg``:
+
+| `--patch-agg` | rule | when to pick |
+|---|---|---|
+| `mean` (default) | Chamfer: 1 − mean of per-patch top-1 sims | robust, recommended first |
+| `topk` | 1 − mean of the N/4 *lowest* top-1 sims | emphasises localised change |
+| `min` | 1 − single most-novel patch's top-1 sim | most sensitive, noisiest |
+
+Cost is O(T · N² · K). For a 30 s Charades clip at 5 FPS with N=196
+patches, K=12 memory, that's ~140M float ops per clip — fast on CPU.
+
+Run it via the existing CLIs:
+
+```bash
+python -m bench.charades \
+  --annotations data/charades/Charades/Charades_v1_test.csv \
+  --videos      data/charades/Charades_v1_480 \
+  --out         outputs/charades_patch \
+  --model       facebook/dinov2-small \
+  --patch-novelty --patch-agg mean \
+  --fps 5 --memory 12 --peak-prom 1.8 --min-gap 3 --batch-size 64
+
+# or on a single video
+python -m src.main --video clip.mp4 --out outputs/run1 --patch-novelty
+```
+
+## Baselines
+
+To argue that your method isn't rediscovering pixel statistics, run
+both baselines and compare.
+
+```bash
+# frame-difference: scene boundary = peak in mean abs grayscale diff
+python -m bench.baselines \
+  --dataset charades \
+  --annotations data/charades/Charades/Charades_v1_test.csv \
+  --videos      data/charades/Charades_v1_480 \
+  --out         outputs/charades_framediff \
+  --baseline    frame_diff \
+  --fps 5 --peak-prom 1.8 --min-gap 3 --max-videos 200
+
+# uniform spacing, count matched to your model's predictions
+python -m bench.baselines \
+  --dataset charades \
+  --annotations data/charades/Charades/Charades_v1_test.csv \
+  --predictions outputs/charades_run1/predictions.json \
+  --out         outputs/charades_uniform_matchpred \
+  --baseline    uniform --n-strategy match-pred
+
+# uniform spacing, count matched to GT (oracle on N, not on placement)
+python -m bench.baselines \
+  --dataset charades \
+  --annotations data/charades/Charades/Charades_v1_test.csv \
+  --out         outputs/charades_uniform_matchgt \
+  --baseline    uniform --n-strategy match-gt
+```
+
+Expected ordering on Charades (rough targets):
+
+| baseline | F1@0.05 (target) |
+|---|---|
+| zero-prediction | 0.000 |
+| uniform `match-gt` | 0.30 – 0.40 |
+| uniform `match-pred` | 0.30 – 0.40 |
+| frame-diff | 0.35 – 0.45 |
+| **DINOv2 + pooled novelty** | **~0.50** |
+| DINOv2 + patch-Chamfer | hopefully **0.52 – 0.58** |
+
+If your DINO methods don't beat frame-diff by ≥0.05 at strict
+tolerance, the "we need foundation features" framing is in trouble —
+plain pixel statistics found the same boundaries.
+
+## Memory / prominence / score-mode sweep
+
+Caches features once, then runs the cheap parts of the pipeline across
+a grid of configurations.
+
+```bash
+# (1) cache once — same cost as a normal bench run
+python -m bench.sweep cache \
+  --dataset charades \
+  --annotations data/charades/Charades/Charades_v1_test.csv \
+  --videos      data/charades/Charades_v1_480 \
+  --cache       outputs/charades_cache \
+  --model       facebook/dinov2-small \
+  --fps 5 --batch-size 64 --max-videos 500
+
+# (2) sweep cheaply — runs in seconds per config
+python -m bench.sweep run \
+  --dataset charades \
+  --annotations data/charades/Charades/Charades_v1_test.csv \
+  --cache       outputs/charades_cache \
+  --out         outputs/charades_sweep \
+  --memory      6 12 24 48 \
+  --peak-prom   1.5 1.8 2.0 2.5 \
+  --score-modes pooled cls patch_mean patch_topk
+```
+
+Output: `sweep.json` with every config + its F1 grid, plus a printed
+table of "best F1@0.05 per score mode" so you can read off the answer
+in one glance.
 
 ## Adding a new dataset
 

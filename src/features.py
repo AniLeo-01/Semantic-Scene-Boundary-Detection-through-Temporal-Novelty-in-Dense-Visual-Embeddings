@@ -30,8 +30,10 @@ def _hf_token() -> Optional[str]:
 
 
 DEFAULT_MODELS = [
-    "facebook/dinov3-vits16-pretrain-lvd1689m",  # preferred
-    "facebook/dinov2-small",                      # fallback
+    # Empirically tied with DINOv3 on Charades and not gated — see THESIS.md.
+    "facebook/dinov2-small",
+    "facebook/dinov2-base",
+    "facebook/dinov3-vits16-pretrain-lvd1689m",  # only useful if you have HF access
 ]
 
 
@@ -39,9 +41,10 @@ DEFAULT_MODELS = [
 class FrameEmbedding:
     idx: int
     pts_s: float
-    cls: np.ndarray            # (D,) L2-normalized
-    patch_mean: np.ndarray     # (D,) L2-normalized mean of patch tokens
-    combined: np.ndarray       # (2D,) concat of [cls, patch_mean] then L2-normalized
+    cls: np.ndarray            # (D,)   L2-normalized
+    patch_mean: np.ndarray     # (D,)   L2-normalized mean of patch tokens
+    combined: np.ndarray       # (2D,)  concat of [cls, patch_mean] then L2-normalized
+    patches: np.ndarray        # (N, D) raw patch tokens, L2-normalized per row
 
 
 class DinoFeatureExtractor:
@@ -103,20 +106,30 @@ class DinoFeatureExtractor:
 
         out = self.model(**inputs)
         # DINOv2/v3 expose last_hidden_state: (B, 1+N, D) where token 0 is CLS.
-        hs = out.last_hidden_state  # (B, T, D)
-        cls = hs[:, 0, :]           # (B, D)
-        patches = hs[:, 1:, :]      # (B, N, D)
-        patch_mean = patches.mean(dim=1)  # (B, D)
+        hs = out.last_hidden_state          # (B, 1+N, D)
+        cls = hs[:, 0, :]                   # (B, D)
+        patches = hs[:, 1:, :]              # (B, N, D)
+        patch_mean = patches.mean(dim=1)    # (B, D)
 
         cls = F.normalize(cls, dim=-1)
         patch_mean = F.normalize(patch_mean, dim=-1)
+        # L2-normalize each patch token row-wise so per-patch cosine sim
+        # downstream is just a dot product.
+        patches_n = F.normalize(patches, dim=-1)
         combined = F.normalize(torch.cat([cls, patch_mean], dim=-1), dim=-1)
 
         cls_np = cls.float().cpu().numpy()
         pm_np = patch_mean.float().cpu().numpy()
         cb_np = combined.float().cpu().numpy()
+        pt_np = patches_n.float().cpu().numpy()  # (B, N, D)
 
         return [
-            FrameEmbedding(idx=i, pts_s=p, cls=cls_np[k], patch_mean=pm_np[k], combined=cb_np[k])
+            FrameEmbedding(
+                idx=i, pts_s=p,
+                cls=cls_np[k],
+                patch_mean=pm_np[k],
+                combined=cb_np[k],
+                patches=pt_np[k],
+            )
             for k, (i, p) in enumerate(zip(idxs, pts))
         ]

@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from .features import DinoFeatureExtractor
 from .keyframes import select_keyframes
-from .novelty import compute_novelty, detect_peaks, peaks_to_segments
+from .novelty import compute_novelty, compute_patch_novelty, detect_peaks, peaks_to_segments
 from .sampling import sample_frames, video_meta
 from .viewer import write_viewer
 from .viz import plot_novelty
@@ -37,7 +37,16 @@ def run(
     save_embeddings: bool = False,
     copy_video: bool = False,
     video_url: str | None = None,
+    patch_novelty: bool = False,
+    patch_agg: str = "mean",
 ) -> dict:
+    """Pipeline runner.
+
+    ``patch_novelty`` switches the novelty score from pooled-cosine to
+    per-patch Chamfer over raw patch tokens. ``patch_agg`` is the patch
+    aggregation rule (``mean`` | ``topk`` | ``min``) — see
+    ``src/novelty.py:compute_patch_novelty``.
+    """
     out = Path(out_dir)
     (out / "keyframes").mkdir(parents=True, exist_ok=True)
 
@@ -54,6 +63,7 @@ def run(
     raw_frames: list = []   # keep small thumbnails for keyframe output
 
     all_embeds: list = []
+    all_patches: list = []
     all_pts: list = []
     all_idxs: list = []
 
@@ -64,6 +74,8 @@ def run(
         for e in embs:
             vec = e.combined if use_patches else e.cls
             all_embeds.append(vec)
+            if patch_novelty:
+                all_patches.append(e.patches)
             all_pts.append(e.pts_s)
             all_idxs.append(e.idx)
         images_buf.clear()
@@ -93,7 +105,13 @@ def run(
         np.savez(out / "embeddings.npz", embeddings=embeddings, pts_s=pts_s)
 
     # 3) novelty + 4) peaks
-    scores = compute_novelty(embeddings, memory=memory)
+    if patch_novelty:
+        patches_arr = np.stack(all_patches, axis=0).astype(np.float32)  # (T, N, D)
+        print(f"[novelty-mode] patch (agg={patch_agg}, N={patches_arr.shape[1]})")
+        scores = compute_patch_novelty(patches_arr, memory=memory, agg=patch_agg)
+    else:
+        print("[novelty-mode] pooled")
+        scores = compute_novelty(embeddings, memory=memory)
     nv = detect_peaks(scores, min_gap=min_gap, prominence_k=peak_prom, smoothing=smoothing)
     print(
         f"[novelty] height_floor={nv.threshold * 0.6:.4f} "
@@ -184,6 +202,17 @@ def parse_args():
         default=None,
         help="explicit src for the <video> tag (overrides --copy-video and the default relative path)",
     )
+    p.add_argument(
+        "--patch-novelty",
+        action="store_true",
+        help="use per-patch (Chamfer) novelty instead of pooled-vector novelty",
+    )
+    p.add_argument(
+        "--patch-agg",
+        choices=["mean", "topk", "min"],
+        default="mean",
+        help="aggregation rule when --patch-novelty (default: mean)",
+    )
     return p.parse_args()
 
 
@@ -204,4 +233,6 @@ if __name__ == "__main__":
         save_embeddings=args.save_embeddings,
         copy_video=args.copy_video,
         video_url=args.video_url,
+        patch_novelty=args.patch_novelty,
+        patch_agg=args.patch_agg,
     )

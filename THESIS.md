@@ -390,11 +390,20 @@ opposite is true, so we expose `--keyframe-method peak`.
 
 ### Why concatenate CLS and patch-mean, instead of using one?
 
-CLS captures the gist; patch-mean captures average local content. The
-two signals are correlated but not identical. Concatenation gives the
-downstream cosine comparison two independent shots at noticing a change.
-A planned ablation (see [§13](#13-open-research-questions)) measures
-whether the patch term actually helps.
+Originally we hypothesized CLS would capture the gist while patch-mean
+captures average local content; concatenating gives the cosine
+comparison two independent shots at noticing a change.
+
+**The ablation has been run on Charades** and the patch-mean term
+contributes nothing measurable (CLS-only F1 ≈ pooled F1 within 0.005).
+The patch-mean averages away exactly the localised information it was
+supposed to add. The current method effectively reduces to CLS-only
+novelty for that benchmark.
+
+The replacement direction is *per-patch* novelty rather than
+pooled-patch novelty — see [§13](#13-open-research-questions) item 4.
+Each query patch is matched against the patch sets of recent frames
+without ever being averaged, so localised changes can't be washed out.
 
 ## 10. Where this will fail — and how we'd know
 
@@ -493,8 +502,13 @@ file, so the following are days-of-work changes, not weeks:
 3. **Memory length sweep.** 4, 8, 16, 32, 64 frames. Where is the sweet
    spot? Does it depend on video content?
 4. **Per-patch novelty.** Replace `1 − max cos(e_t, m_k)` with a
-   patch-token-set distance (e.g., Sinkhorn / 2-Wasserstein). Hypothesis:
-   catches small-region changes the mean misses.
+   patch-token-set distance. A Chamfer formulation (each query patch's
+   single best match against all memory patches, aggregated mean / topk
+   / min across the N query patches) is implemented as
+   `src/novelty.py:compute_patch_novelty`; access it via
+   `--patch-novelty --patch-agg {mean,topk,min}` on any runner.
+   Hypothesis: catches small-region changes the pooled-mean misses.
+   Status: code in place, F1 measurement pending.
 5. **Video-native backbones.** Swap the DINOv3 per-frame feature for
    V-JEPA 2 short-clip features. How much closer does it get to
    "semantic" transitions that have no per-frame visual signal?

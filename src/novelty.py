@@ -33,7 +33,12 @@ class NoveltyResult:
 
 
 def compute_novelty(embeddings: np.ndarray, memory: int = 16, warmup: int = 4) -> np.ndarray:
-    """embeddings: (T, D) L2-normalized. Returns (T,) novelty in [0, 2]."""
+    """Pooled-vector novelty.
+
+    embeddings: (T, D) L2-normalized. Returns (T,) novelty in [0, 2].
+    Per-frame score = 1 - max cosine similarity to any frame in the
+    K-frame memory bank.
+    """
     T = embeddings.shape[0]
     scores = np.zeros(T, dtype=np.float32)
     if T == 0:
@@ -48,6 +53,74 @@ def compute_novelty(embeddings: np.ndarray, memory: int = 16, warmup: int = 4) -
             sims = M @ embeddings[t]                # (k,)
             scores[t] = float(1.0 - sims.max())
         buf.append(embeddings[t])
+    return scores
+
+
+def compute_patch_novelty(
+    patches: np.ndarray,
+    memory: int = 16,
+    warmup: int = 4,
+    agg: str = "mean",
+) -> np.ndarray:
+    """Per-patch (Chamfer) novelty.
+
+    Each frame holds N patch tokens (e.g. 196 for a 224x224 ViT/16).
+    For each query patch we find its single best-matching patch in the
+    K-frame memory bank, take that similarity, then aggregate across
+    patches:
+
+      * ``mean`` (default, recommended) — Chamfer-style:
+        novelty(t) = 1 - mean_p  max_{m, k}  cos( p_t,p ,  m_k,m )
+        Robust; captures the *fraction* of patches that look new.
+
+      * ``topk`` — average of the N/4 lowest per-patch similarities:
+        emphasises localised changes that mean-pooling washes out.
+
+      * ``min`` — single most-novel patch dominates:
+        novelty(t) = 1 - min_p  best_sim(p)
+        High-variance; one outlier patch can fire the detector.
+
+    Inputs:
+      patches  -- (T, N, D), already L2-normalised per row
+      memory   -- ring-buffer length in frames
+      warmup   -- frames at the start whose novelty is forced to 0
+
+    Returns (T,) novelty signal.
+
+    Cost is O(T * N * K * N). For T=200, N=196, K=16 that's ~125M ops;
+    fine on CPU, fast on GPU but we keep it numpy for portability.
+    """
+    if patches.ndim != 3:
+        raise ValueError(f"patches must be (T,N,D); got {patches.shape}")
+    T, N, _D = patches.shape
+    scores = np.zeros(T, dtype=np.float32)
+    if T == 0:
+        return scores
+    if agg not in ("mean", "topk", "min"):
+        raise ValueError(f"unknown agg={agg!r}; expected mean|topk|min")
+
+    buf: deque = deque(maxlen=memory)
+    topk = max(1, N // 4)
+
+    for t in range(T):
+        if len(buf) < warmup:
+            scores[t] = 0.0
+        else:
+            # (K*N, D)  — concatenate every memory frame's patches
+            M = np.concatenate(list(buf), axis=0)
+            # (N, K*N)  — every query patch vs every memory patch
+            sims = patches[t] @ M.T
+            best = sims.max(axis=1)            # (N,) best match per query
+            if agg == "mean":
+                score = 1.0 - float(best.mean())
+            elif agg == "topk":
+                # average of the smallest topk best-matches => most-novel patches
+                lowest = np.partition(best, topk)[:topk]
+                score = 1.0 - float(lowest.mean())
+            else:  # min
+                score = 1.0 - float(best.min())
+            scores[t] = score
+        buf.append(patches[t])
     return scores
 
 

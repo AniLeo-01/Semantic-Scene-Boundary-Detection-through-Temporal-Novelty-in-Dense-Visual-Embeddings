@@ -138,9 +138,11 @@ def video_path_for(videos_dir: str, vid: str) -> Path | None:
 
 def predict_one(video_path: str, *, fps: float, memory: int,
                 peak_prom: float, min_gap: int, smoothing: int,
-                use_patches: bool, batch_size: int, extractor) -> Tuple[List[float], float]:
+                use_patches: bool, batch_size: int, extractor,
+                patch_novelty: bool = False,
+                patch_agg: str = "mean") -> Tuple[List[float], float]:
     from src.sampling import sample_frames, video_meta
-    from src.novelty import compute_novelty, detect_peaks
+    from src.novelty import compute_novelty, compute_patch_novelty, detect_peaks
 
     dur, _src_fps, _n = video_meta(video_path)
 
@@ -150,7 +152,8 @@ def predict_one(video_path: str, *, fps: float, memory: int,
     if not images:
         return [], dur
 
-    all_vec = []
+    all_vec: list = []
+    all_patches: list = []
     for i in range(0, len(images), batch_size):
         embs = extractor.embed_batch(
             images[i:i + batch_size],
@@ -159,9 +162,15 @@ def predict_one(video_path: str, *, fps: float, memory: int,
         )
         for e in embs:
             all_vec.append(e.combined if use_patches else e.cls)
+            if patch_novelty:
+                all_patches.append(e.patches)
     E = np.stack(all_vec, axis=0).astype(np.float32)
 
-    scores = compute_novelty(E, memory=memory)
+    if patch_novelty:
+        P = np.stack(all_patches, axis=0).astype(np.float32)  # (T, N, D)
+        scores = compute_patch_novelty(P, memory=memory, agg=patch_agg)
+    else:
+        scores = compute_novelty(E, memory=memory)
     nv = detect_peaks(scores, min_gap=min_gap, prominence_k=peak_prom, smoothing=smoothing)
     return [float(pts[i]) for i in nv.peak_idxs.tolist()], dur
 
@@ -179,6 +188,7 @@ def run_eval(
     min_gap: int = 3, smoothing: int = 1, use_patches: bool = True,
     model: str | None = None, batch_size: int = 32,
     max_videos: int | None = None,
+    patch_novelty: bool = False, patch_agg: str = "mean",
     rel_dis_grid=(0.05, 0.1, 0.2, 0.3, 0.4, 0.5),
 ) -> dict:
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
@@ -213,6 +223,7 @@ def run_eval(
                     peak_prom=peak_prom, min_gap=min_gap, smoothing=smoothing,
                     use_patches=use_patches, batch_size=batch_size,
                     extractor=extractor,
+                    patch_novelty=patch_novelty, patch_agg=patch_agg,
                 )
                 pred_per_video[vid] = bd
                 if labels[vid].get("duration_s", 0.0) <= 0:
@@ -280,6 +291,10 @@ def parse_args():
     p.add_argument("--model", default=None)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--max-videos", type=int, default=None)
+    p.add_argument("--patch-novelty", action="store_true",
+                   help="use per-patch Chamfer novelty over raw patch tokens")
+    p.add_argument("--patch-agg", choices=["mean", "topk", "min"], default="mean",
+                   help="patch-novelty aggregation rule (default: mean)")
     return p.parse_args()
 
 
@@ -300,4 +315,6 @@ if __name__ == "__main__":
         model=args.model,
         batch_size=args.batch_size,
         max_videos=args.max_videos,
+        patch_novelty=args.patch_novelty,
+        patch_agg=args.patch_agg,
     )
