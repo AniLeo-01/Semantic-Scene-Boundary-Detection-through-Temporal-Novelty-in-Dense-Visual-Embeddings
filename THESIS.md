@@ -433,39 +433,42 @@ p-value per peak.
 
 ## 11. How this relates to prior work
 
-The problem sits squarely in the **Generic Event Boundary Detection**
-(GEBD) literature, formalized by the Kinetics-GEBD benchmark. Notable
-prior methods include:
+The problem sits squarely in the literature on **scene/event boundary
+detection in video**. Notable prior methods include:
 
 - **TransNet V2** — purpose-built shot boundary detector. Strong on
   cuts; not designed for slow semantic transitions.
 - **BaSSL** — boundary-aware self-supervised learning for movies.
 - **DDM-Net** — dense difference module for event boundaries.
-- **SC-Transformer** — structured context transformer for GEBD.
+- **SC-Transformer** — structured context transformer for event
+  boundaries.
 
 What's novel about our approach relative to these:
 
 - **Fully training-free.** No fine-tuning of the backbone. No learned
   boundary head. The whole pipeline is signal processing over frozen
   DINOv3 features.
-- **Memory-bank novelty rather than learned scoring.** Most modern GEBD
-  methods learn a per-frame boundary probability. We argue that with a
-  strong enough feature extractor, plain max-cosine-against-recent-memory
-  is competitive, and that argument is empirically falsifiable.
+- **Memory-bank novelty rather than learned scoring.** Most modern
+  boundary-detection methods learn a per-frame boundary probability.
+  We argue that with a strong enough feature extractor, plain
+  max-cosine-against-recent-memory is competitive, and that argument
+  is empirically falsifiable.
 - **Two scales of representation.** CLS + patch-mean, treated as a single
   vector. Most baselines use one or the other.
 
 If the ablations land, the contribution is **a strong, fully
-self-supervised, training-free baseline for GEBD.** That is a small but
-real publishable result. If the ablations show DINOv3 is not enough and
-that video models are required, the negative result is still informative.
+self-supervised, training-free baseline for narrative-scene boundary
+detection.** That is a small but real publishable result. If the
+ablations show DINOv3 is not enough and that video models are required,
+the negative result is still informative.
 
 ## 12. What a successful outcome looks like
 
 Concretely, we declare success if:
 
-- On Kinetics-GEBD, F1 with `rel_dis = 0.05` is within ~5 points of
-  trained baselines despite using zero training.
+- On the BBC Planet Earth scene-boundary benchmark, F1 at a strict
+  tolerance (`rel_dis ≈ 0.005`–`0.01`) is within ~5 points of trained
+  baselines despite using zero training.
 - On a hand-curated set of "slow semantic transition" clips (traffic
   lights, manufacturing, gameplay), the system fires within ±1 second
   of the true transition in ≥ 70% of cases.

@@ -1,136 +1,120 @@
-# Kinetics-GEBD validation
+# Validation benchmarks
 
-This folder contains the benchmark harness for the
-[Generic Event Boundary Detection](https://github.com/StanLei52/GEBD)
-task (Shou et al., ICCV 2021) — the canonical evaluation for the
-problem this project addresses.
+Currently implemented: **BBC Planet Earth** (`bench/bbc.py`).
 
-## What gets measured
+The scoring logic in `bench/metrics.py` is dataset-agnostic — F1@rel_dis
+with greedy 1-to-1 matching — so adding a new dataset is just a label
+loader and a `run_eval()` wrapper.
 
-For each video, a *predicted* set of boundary timestamps `{p_i}` (in
-seconds) is compared against *each* annotator's ground-truth set
-`{g_j^k}` (each video is annotated by ~5 humans). A prediction is a
-true positive if it falls within `rel_dis · video_duration` seconds
-of an unmatched ground-truth boundary.
+## BBC Planet Earth — quick start
 
-The official metric is **F1 averaged over annotators, then averaged
-over videos**, reported at several `rel_dis` tolerances (0.05 strict,
-0.5 lenient). The headline number is **F1 @ rel_dis = 0.05**.
-
-## End-to-end procedure
+The BBC Planet Earth dataset has 11 ~50-minute nature-documentary
+episodes with annotated *narrative* scene boundaries (i.e. when the
+documentary switches between scenes / topics, not just between camera
+cuts). It's the canonical small benchmark for what this project
+actually tries to do.
 
 ```bash
-# 1) install benchmark deps
-pip install yt-dlp                # for video download
-# (the harness itself uses numpy + the existing src/ stack)
+# 1. obtain the videos (academic mirrors — links rot, you may need to
+#    search "BBC Planet Earth dataset scene boundary").
+#    Put them in data/bbc/episodes/EP01.mp4 ... EP11.mp4
 
-# 2) get labels — the GEBD authors host annotations on Google Drive, not GitHub
-pip install gdown
-mkdir -p data/gebd
-gdown --folder https://drive.google.com/drive/folders/1AlPr63Q9D-HAGc5bOUNTzjCiWOC1a3xo \
-      -O data/gebd
-# you want:  data/gebd/k400_mr345_val_min_change_duration0.3.pkl
+# 2. obtain the labels (JSON or CSV, see bench/bbc.py for format).
+#    Put them in data/bbc/labels.json
 
-# 3) download a sample of videos (full val set is ~4k after attrition;
-#    start with 200 to verify your pipeline runs)
-python -m bench.fetch_kinetics_gebd \
-  --labels data/gebd/k400_mr345_val_min_change_duration0.3.pkl \
-  --out    data/gebd/val_videos \
-  --max    200
-
-# 4) run predictions + score
-python -m bench.kinetics_gebd \
-  --labels data/gebd/k400_mr345_val_min_change_duration0.3.pkl \
-  --videos data/gebd/val_videos \
-  --out    outputs/gebd_run1 \
-  --fps 3 --memory 16 --peak-prom 2.0 --min-gap 8 \
-  --batch-size 64 \
-  --max-videos 200
+# 3. run the bench
+python -m bench.bbc \
+  --labels  data/bbc/labels.json \
+  --videos  data/bbc/episodes \
+  --out     outputs/bbc_run1 \
+  --model   facebook/dinov3-vits16-pretrain-lvd1689m \
+  --fps 3 --memory 24 --peak-prom 2.0 --min-gap 30 \
+  --batch-size 64
 ```
 
-Console output:
+Expected runtime on an L4 GPU: ~10 min per episode at 3 FPS, so ~2 hours
+for all 11 episodes. Cache the predictions and re-score with different
+hyperparameters cheaply.
 
-```
-rel_dis  n_videos       P       R      F1
-   0.05       N    0.???   0.???   0.???
-   0.10       N    0.???   0.???   0.???
-   0.20       N    0.???   0.???   0.???
-   ...
-```
+## Label-file formats accepted
 
-and the same numbers land in `outputs/gebd_run1/summary.json`.
-
-Predictions are cached at `outputs/gebd_run1/predictions.json` so
-ablations don't have to re-extract features:
-
-```bash
-# re-score with looser peak detection — no GPU needed
-python -m bench.kinetics_gebd \
-  --labels data/gebd/k400_mr345_val_min_change_duration0.3.pkl \
-  --predictions outputs/gebd_run1/predictions.json \
-  --eval-only --out outputs/gebd_rescored
-```
-
-(Note: re-scoring only applies if you change the *post-prediction*
-config. Changing FPS, memory, model, etc. requires fresh predictions.)
-
-## Reference numbers
-
-Published F1 @ rel_dis = 0.05 on the GEBD val set:
-
-| Method | F1@0.05 | Trained? |
-|---|---|---|
-| Random uniform | ~0.30 | no |
-| BMN baseline | 0.49 | yes |
-| TransNet V2 (shot detector, not GEBD-tuned) | ~0.46 | yes |
-| BaSSL | 0.65 | yes (self-sup) |
-| DDM-Net | 0.76 | yes (sup) |
-| SC-Transformer | 0.78 | yes (sup) |
-
-Numbers above ~0.65 with **no training** would be a real result.
-
-## What to look at in the output
-
-`summary.json`:
+**JSON, single annotator** (simplest):
 
 ```json
 {
-  "config": { "fps": 3.0, "memory": 16, "peak_prom": 2.0, ... },
-  "n_predicted": 187,
-  "n_evaluated": 187,
-  "metrics": [
-    { "rel_dis": 0.05, "precision": 0.??, "recall": 0.??, "f1": 0.?? },
-    ...
-  ]
+  "EP01": {"fps": 25, "duration_s": 3010.0,
+           "boundaries": [12.4, 81.0, 154.6, ...]},
+  "EP02": {...}
 }
 ```
 
-`predictions.json` is `{ video_id: [boundary_seconds, ...] }`.
+**JSON, multiple annotators** (some BBC mirrors ship 3 annotators):
 
-## Ablations worth running
+```json
+{
+  "EP01": {"duration_s": 3010.0,
+           "boundaries": [[12.4, 81.0, ...], [13.0, 80.5, ...]]},
+  "EP02": {...}
+}
+```
 
-Each is one CLI invocation against the cached `predictions.json` is
-*not* enough — these change feature extraction. Sweep these:
+**CSV** (with companion `--durations episode_durations.json`):
 
-| Knob | Values | Hypothesis |
-|---|---|---|
-| `--peak-prom` | 1.5, 2.0, 2.5, 3.0 | sensitivity / precision-recall tradeoff |
-| `--memory` | 4, 8, 16, 32, 64 | how much "recent past" helps |
-| `--no-patches` | on/off | does the patch-mean term actually help? |
-| `--model` | dinov3-vits16, dinov3-vitb16, dinov2-small, dinov2-base | architecture vs. params |
-| `--fps` | 2, 3, 5 | temporal resolution |
+```
+episode,boundary_s
+EP01,12.4
+EP01,81.0
+EP02,9.8
+```
 
-A precision-recall curve over `peak_prom` is the most useful single plot.
+## What gets measured
 
-## Other datasets
+For each episode, predicted boundary times in seconds are matched
+1-to-1 against ground-truth boundary times. A prediction is a true
+positive iff it lies within `rel_dis × episode_duration` seconds of an
+unmatched GT boundary. Greedy nearest-neighbour assignment.
 
-`bench/kinetics_gebd.py` is the only validator implemented today.
-Planned (each is a small adapter over the same scoring code):
+We report F1 at a tight grid suited to long-form documentary
+(boundaries are sparse, so absolute tolerances of 15–600 seconds on a
+~3000 s episode are reasonable):
 
-- **MovieScenes** (MovieNet) — narrative-scene labels in addition to
-  shot labels. Tests the project's biggest limitation: do we recover
-  scenes or just shots? See THESIS.md §10.
-- **BBC Planet Earth** — small, classic, easy to demo.
-- **TAPOS** — within-action sub-boundaries.
+| rel_dis | absolute tolerance on a 50-min episode |
+|---|---|
+| 0.005 | 15 s |
+| 0.01 | 30 s |
+| 0.02 | 60 s |
+| 0.05 | 2.5 min |
+| 0.1 | 5 min |
+| 0.2 | 10 min |
 
-Open a PR or ping the author if you start one of these.
+For published BBC numbers, look at the *strict* end (`rel_dis ≈ 0.005`).
+Recent papers report F1@strict in the 0.40–0.70 range on this dataset
+with various trained methods.
+
+## Cached re-scoring
+
+`predictions.json` (the boundary timestamps per episode) is cached, so
+sweeping rel_dis grids or threshold parameters that don't change the
+underlying signal is free:
+
+```bash
+python -m bench.bbc \
+  --labels      data/bbc/labels.json \
+  --predictions outputs/bbc_run1/predictions.json \
+  --out         outputs/bbc_rescored \
+  --eval-only
+```
+
+(`--eval-only` only avoids re-running the pipeline when the predictions
+are already cached. Changing `--peak-prom` requires fresh predictions
+since the peak rule runs at prediction time.)
+
+## Suggested ablation order
+
+1. Baseline DINOv3+patches at default settings.
+2. `--no-patches` — does the patch-mean term help on long documentary?
+3. `--memory 12, 24, 48, 96` — how much "recent past" matters for
+   minute-scale scenes.
+4. `--peak-prom 1.5, 2.0, 2.5, 3.0` — precision-recall curve.
+5. `--model facebook/dinov2-small` — backbone ablation to compare with v3.
+6. Eventually: swap in V-JEPA 2 features (see THESIS.md §13).
