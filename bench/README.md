@@ -10,6 +10,9 @@ Currently implemented:
 - **Sweep** (`bench/sweep.py`) — cache features once, sweep `memory`,
   `peak_prom`, and score modes (pooled / CLS-only / per-patch Chamfer)
   cheaply without re-embedding.
+- **Combine** (`bench/combine.py`) — union / intersection / weighted
+  combination of two predictions JSONs; tells you whether two methods
+  are complementary or redundant.
 
 The scoring logic in `bench/metrics.py` is dataset-agnostic — F1@rel_dis
 with greedy 1-to-1 matching — so adding a new dataset is just a label
